@@ -69,7 +69,7 @@ export async function generateSQL(question, context) {
     req.on('error', e => reject(new Error('Step2 failed: ' + e.message)));
     req.end();
 
-    setTimeout(() => reject(new Error('Timeout after 30s')), 30000);
+    setTimeout(() => reject(new Error('Timeout after 30s')), 60000);
   });
 
   return sql;
