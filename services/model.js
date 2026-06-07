@@ -1,39 +1,51 @@
-import axios from 'axios';
+import https from 'https';
 
 const HF_TOKEN  = process.env.HF_TOKEN;
-const MODEL_URL = 'https://api-inference.huggingface.co/models/Chaitanya182004/nl2sql-model';
+const MODEL_URL = 'Chaitanya182004/nl2sql-model';
 
 export async function generateSQL(question, context) {
   const inputText = `${question} | ${context}`;
 
-  try {
-    const response = await axios.post(
-      MODEL_URL,
-      {
-        inputs    : inputText,
-        parameters: { max_new_tokens: 128, num_beams: 4 }
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${HF_TOKEN}`,
-          'Content-Type' : 'application/json',
-        },
-        timeout: 30000
+  const body = JSON.stringify({
+    inputs    : inputText,
+    parameters: { max_new_tokens: 128, num_beams: 4 }
+  });
+
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: 'api-inference.huggingface.co',
+      path    : `/models/${MODEL_URL}`,
+      method  : 'POST',
+      headers : {
+        'Authorization' : `Bearer ${HF_TOKEN}`,
+        'Content-Type'  : 'application/json',
+        'Content-Length': Buffer.byteLength(body)
       }
-    );
+    };
 
-    const data = response.data;
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.error) {
+            if (parsed.error.includes('loading')) {
+              reject(new Error('Model is loading, try again in 20 seconds'));
+            } else {
+              reject(new Error('HF error: ' + parsed.error));
+            }
+          } else {
+            resolve(parsed[0].generated_text.trim());
+          }
+        } catch(e) {
+          reject(new Error('Parse error: ' + data));
+        }
+      });
+    });
 
-    if (data.error && data.error.includes('loading')) {
-      throw new Error('Model is loading, please try again in 20 seconds');
-    }
-
-    return data[0].generated_text.trim();
-
-  } catch(e) {
-    if (e.response) {
-      throw new Error('HF API error: ' + JSON.stringify(e.response.data));
-    }
-    throw new Error('Network error: ' + e.message);
-  }
+    req.on('error', e => reject(new Error('Request failed: ' + e.message)));
+    req.write(body);
+    req.end();
+  });
 }

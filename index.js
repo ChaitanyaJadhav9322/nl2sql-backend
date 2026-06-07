@@ -16,7 +16,7 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok' });
 });
 
-// Schema explorer
+// Schema
 app.get('/api/schema', async (req, res) => {
   try {
     const schema = await getSchema();
@@ -26,24 +26,55 @@ app.get('/api/schema', async (req, res) => {
   }
 });
 
-// Main route — English -> SQL -> Results
+// Test HF connection
+app.get('/api/test-hf', async (req, res) => {
+  try {
+    const { default: https } = await import('https');
+
+    const options = {
+      hostname: 'api-inference.huggingface.co',
+      path    : '/models/Chaitanya182004/nl2sql-model',
+      method  : 'GET',
+      headers : {
+        'Authorization': `Bearer ${process.env.HF_TOKEN}`
+      }
+    };
+
+    const result = await new Promise((resolve, reject) => {
+      const req = https.request(options, (res) => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => resolve({
+          status: res.statusCode,
+          body  : data.slice(0, 300)
+        }));
+      });
+      req.on('error', e => reject(e.message));
+      req.end();
+    });
+
+    res.json(result);
+  } catch(e) {
+    res.json({ error: e.message });
+  }
+});
+
+// Main query route
 app.post('/api/query', async (req, res) => {
   try {
     const { question } = req.body;
     if (!question) return res.status(400).json({ error: 'Question is required' });
 
-    // Get schema from Neon
     const schemaData = await getSchema();
 
-    // Build CREATE TABLE context string for model
     const context = Object.entries(schemaData)
-      .map(([table, cols]) => `CREATE TABLE ${table} (${cols.join(', ')})`)
+      .map(([table, cols]) => {
+        const cleanCols = cols.map(c => c.split(' (')[0]);
+        return `CREATE TABLE ${table} (${cleanCols.join(', ')})`;
+      })
       .join(' ');
 
-    // Call YOUR Hugging Face model
-    const sql = await generateSQL(question, context);
-
-    // Run SQL on Neon
+    const sql    = await generateSQL(question, context);
     const result = await runQuery(sql);
 
     res.json({
