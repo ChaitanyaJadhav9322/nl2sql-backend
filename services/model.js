@@ -2,7 +2,7 @@ import https from 'https';
 
 export async function generateSQL(question, context) {
 
-  // Step 1 — Post with data array format
+  // Step 1 — POST to HF Space Gradio API to start generation
   const body = JSON.stringify({
     data: [question, context]
   });
@@ -24,20 +24,20 @@ export async function generateSQL(question, context) {
       res.on('end', () => {
         try {
           const parsed = JSON.parse(data);
-          if (!parsed.event_id) reject(new Error('No event_id: ' + data));
+          if (!parsed.event_id) reject(new Error('No event_id returned: ' + data));
           else resolve(parsed.event_id);
         } catch(e) {
-          reject(new Error('Step1 parse error: ' + data));
+          reject(new Error('Step 1 parse error: ' + data));
         }
       });
     });
 
-    req.on('error', e => reject(new Error('Step1 failed: ' + e.message)));
+    req.on('error', e => reject(new Error('Step 1 failed: ' + e.message)));
     req.write(body);
     req.end();
   });
 
-  // Step 2 — Get result using event_id
+  // Step 2 — GET result using the event_id (SSE stream)
   const sql = await new Promise((resolve, reject) => {
     const options = {
       hostname: 'chaitanya182004-nl2sql-api.hf.space',
@@ -48,6 +48,7 @@ export async function generateSQL(question, context) {
 
     const req = https.request(options, (res) => {
       let buffer = '';
+
       res.on('data', chunk => {
         buffer += chunk.toString();
         const lines = buffer.split('\n');
@@ -58,18 +59,22 @@ export async function generateSQL(question, context) {
               if (Array.isArray(parsed) && parsed.length > 0) {
                 resolve(parsed[0].trim());
               }
-            } catch(e) {}
+            } catch(e) {
+              // keep reading — not all lines are JSON
+            }
           }
         }
       });
+
       res.on('end', () => reject(new Error('Stream ended without result')));
-      res.on('error', e => reject(new Error('Step2 error: ' + e.message)));
+      res.on('error', e => reject(new Error('Step 2 stream error: ' + e.message)));
     });
 
-    req.on('error', e => reject(new Error('Step2 failed: ' + e.message)));
+    req.on('error', e => reject(new Error('Step 2 request failed: ' + e.message)));
     req.end();
 
-    setTimeout(() => reject(new Error('Timeout after 30s')), 60000);
+    // Timeout safety — 60 seconds
+    setTimeout(() => reject(new Error('Timeout: model took too long')), 60000);
   });
 
   return sql;

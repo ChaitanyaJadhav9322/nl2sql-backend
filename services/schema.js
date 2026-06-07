@@ -4,9 +4,12 @@ dotenv.config();
 
 const { Client } = pg;
 
-export async function getSchema() {
+// databaseUrl param: custom URL from frontend header, or falls back to .env
+export async function getSchema(databaseUrl) {
+  const url    = databaseUrl || process.env.DATABASE_URL;
+
   const client = new Client({
-    connectionString: process.env.DATABASE_URL,
+    connectionString: url,
     ssl: { rejectUnauthorized: false }
   });
 
