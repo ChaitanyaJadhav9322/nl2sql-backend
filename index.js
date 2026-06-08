@@ -4,6 +4,7 @@ import dotenv   from 'dotenv';
 import { getSchema }   from './services/schema.js';
 import { runQuery }    from './services/executor.js';
 import { generateSQL } from './services/model.js';
+import { saveHistory, getHistory, clearHistory } from './services/history.js';
 
 dotenv.config();
 
@@ -11,77 +12,78 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ── Health check ──────────────────────────────────────────────
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok' });
-});
+// ── Health ────────────────────────────────────────────────────
+app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
-// ── Test custom DB connection ─────────────────────────────────
-// Called when user clicks "Test & Connect" in the frontend modal
+// ── Test custom DB ────────────────────────────────────────────
 app.post('/api/test-db', async (req, res) => {
   const { databaseUrl } = req.body;
-  if (!databaseUrl) {
-    return res.status(400).json({ success: false, error: 'databaseUrl is required' });
-  }
+  if (!databaseUrl) return res.status(400).json({ success:false, error:'databaseUrl required' });
   try {
     const schema     = await getSchema(databaseUrl);
     const tableCount = Object.keys(schema).length;
-    res.json({ success: true, tableCount });
+    res.json({ success:true, tableCount });
   } catch(e) {
-    res.json({ success: false, error: e.message });
+    res.json({ success:false, error:e.message });
   }
 });
 
 // ── Schema ────────────────────────────────────────────────────
-// Uses custom DB from header if provided, else falls back to .env
 app.get('/api/schema', async (req, res) => {
   try {
     const dbUrl  = req.headers['x-database-url'] || process.env.DATABASE_URL;
     const schema = await getSchema(dbUrl);
     res.json(schema);
   } catch(e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error:e.message });
   }
 });
 
-// ── Test HF Space connection (debug route) ────────────────────
-app.get('/api/test-hf', async (req, res) => {
+// ── Chat History: GET ─────────────────────────────────────────
+app.get('/api/history', async (req, res) => {
   try {
-    const { default: https } = await import('https');
-    const options = {
-      hostname: 'chaitanya182004-nl2sql-api.hf.space',
-      path    : '/gradio_api/info',
-      method  : 'GET',
-    };
-    const result = await new Promise((resolve, reject) => {
-      const req = https.request(options, (res) => {
-        let data = '';
-        res.on('data', chunk => data += chunk);
-        res.on('end', () => resolve({ status: res.statusCode, body: data.slice(0, 300) }));
-      });
-      req.on('error', e => reject(e.message));
-      req.end();
-    });
-    res.json(result);
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ error:'userId required' });
+    const history = await getHistory(userId);
+    res.json({ history });
   } catch(e) {
-    res.json({ error: e.message });
+    res.status(500).json({ error:e.message });
   }
 });
 
-// ── Main query route ──────────────────────────────────────────
-// Uses custom DB from header if provided, else falls back to .env
+// ── Chat History: POST ────────────────────────────────────────
+app.post('/api/history', async (req, res) => {
+  try {
+    const { userId, question, sql, rowCount } = req.body;
+    if (!userId || !question) return res.status(400).json({ error:'userId and question required' });
+    await saveHistory(userId, question, sql, rowCount);
+    res.json({ success:true });
+  } catch(e) {
+    res.status(500).json({ error:e.message });
+  }
+});
+
+// ── Chat History: DELETE ──────────────────────────────────────
+app.delete('/api/history', async (req, res) => {
+  try {
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ error:'userId required' });
+    await clearHistory(userId);
+    res.json({ success:true });
+  } catch(e) {
+    res.status(500).json({ error:e.message });
+  }
+});
+
+// ── Main query ────────────────────────────────────────────────
 app.post('/api/query', async (req, res) => {
   try {
     const { question } = req.body;
-    if (!question) return res.status(400).json({ error: 'Question is required' });
+    if (!question) return res.status(400).json({ error:'Question is required' });
 
-    // Pick DB — custom from header or default from .env
     const dbUrl      = req.headers['x-database-url'] || process.env.DATABASE_URL;
-
-    // Get schema from whichever DB is being used
     const schemaData = await getSchema(dbUrl);
 
-    // Build CREATE TABLE context string for the AI model
     const context = Object.entries(schemaData)
       .map(([table, cols]) => {
         const cleanCols = cols.map(c => c.split(' (')[0]);
@@ -89,10 +91,7 @@ app.post('/api/query', async (req, res) => {
       })
       .join(' ');
 
-    // Call HF Space model to generate SQL
-    const sql = await generateSQL(question, context);
-
-    // Run SQL on the correct DB
+    const sql    = await generateSQL(question, context);
     const result = await runQuery(sql, dbUrl);
 
     res.json({
@@ -100,9 +99,8 @@ app.post('/api/query', async (req, res) => {
       columns: result.fields.map(f => f.name),
       rows   : result.rows
     });
-
   } catch(e) {
-    res.status(500).json({ error: e.message });
+    res.status(500).json({ error:e.message });
   }
 });
 
