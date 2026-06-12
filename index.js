@@ -12,6 +12,32 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Fix common AI SQL mistakes
+function fixSQL(sql, schemaData) {
+  let fixed = sql.trim().replace(/;\s*$/, '');
+  const tables = Object.keys(schemaData);
+
+  // Replace generic 'table' placeholder
+  fixed = fixed.replace(/\bFROM\s+table\b/gi, `FROM ${tables[0]}`);
+
+  // Fix wrong column aliases like t1.column_name → actual table.column_name
+  // Get all real column names from schema
+  const allCols = {};
+  for (const [tbl, cols] of Object.entries(schemaData)) {
+    for (const col of cols) {
+      const colName = col.split(' (')[0].trim();
+      allCols[colName] = tbl;
+    }
+  }
+
+  // Replace t1.colname / t2.colname with correct table.colname
+  fixed = fixed.replace(/\bt\d+\.(\w+)\b/g, (match, colName) => {
+    if (allCols[colName]) return `${allCols[colName]}.${colName}`;
+    return match; // keep original if not found
+  });
+
+  return fixed + ';';
+}
 // ── Health ────────────────────────────────────────────────────
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));
 
