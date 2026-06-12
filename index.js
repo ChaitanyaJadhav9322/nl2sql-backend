@@ -84,15 +84,22 @@ app.post('/api/query', async (req, res) => {
     const dbUrl      = req.headers['x-database-url'] || process.env.DATABASE_URL;
     const schemaData = await getSchema(dbUrl);
 
-    const context = Object.entries(schemaData)
-      .map(([table, cols]) => {
-        const cleanCols = cols.map(c => c.split(' (')[0]);
-        return `CREATE TABLE ${table} (${cleanCols.join(', ')})`;
-      })
-      .join(' ');
+    // Build detailed context with column types for better AI accuracy
+const context = Object.entries(schemaData)
+  .map(([table, cols]) => {
+    const colDefs = cols.map(c => {
+      const match = c.match(/(.*?)\s*\((.*?)\)/);
+      return match ? `${match[1].trim()} ${match[2].toUpperCase()}` : c;
+    });
+    return `CREATE TABLE ${table} (${colDefs.join(', ')})`;
+  })
+  .join('; ');
 
-    const sql    = await generateSQL(question, context);
-    const result = await runQuery(sql, dbUrl);
+// Generate SQL and fix common alias mistakes
+let sql = await generateSQL(question, context);
+sql = fixSQL(sql, schemaData);
+
+const result = await runQuery(sql, dbUrl);
 
     res.json({
       sql,
